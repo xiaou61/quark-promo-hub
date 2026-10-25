@@ -121,6 +121,12 @@ export async function claimLegacy(userId: string): Promise<void> {
       changed = true;
     }
   }
+  for (const r of db.resources) {
+    if (!r.userId) {
+      r.userId = userId;
+      changed = true;
+    }
+  }
   const u = db.users.find((x) => x.id === userId);
   if (u && !u.activeId && db.legacyActiveId) {
     u.activeId = db.legacyActiveId;
