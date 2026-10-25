@@ -19,7 +19,8 @@ import * as dircache from "./dircache.ts";
 import * as quark from "./quark.ts";
 import * as uc from "./uc.ts";
 import * as baidu from "./baidu.ts";
-import type { Platform, Share } from "../shared/types.ts";
+import * as resourceClaim from "./resource.ts";
+import type { Platform, Resource, Share } from "../shared/types.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const DIST = join(ROOT, "web", "dist");
@@ -441,6 +442,59 @@ async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Prom
     const ok = await store.removeShare(me!.id, parts[2]);
     if (!ok) throw new HttpError(404, "分享记录不存在");
     return send(res, 200, { ok: true });
+  }
+
+  // ---- 资源站 ----
+  if (method === "GET" && path === "/api/resources") {
+    return send(res, 200, await store.listResources(me!.id));
+  }
+
+  if (method === "POST" && path === "/api/resources") {
+    const b = await body(req);
+    const row = await activeRow(me!.id);
+    const now = new Date().toISOString();
+    const resource: Resource = {
+      id: randomUUID(),
+      userId: me!.id,
+      title: str(b.title, "title"),
+      description: typeof b.description === "string" ? b.description : "",
+      sourceUrl: str(b.sourceUrl, "sourceUrl"),
+      sourcePasscode: typeof b.sourcePasscode === "string" ? b.sourcePasscode : "",
+      platform: row.account.platform,
+      toPdir: (b.toPdir as string) || "0",
+      ownUrl: null,
+      ownPasscode: null,
+      ownFids: null,
+      status: "pending",
+      error: null,
+      hits: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // 先校验链接能不能解析，别把错的存进库
+    quark.parseShareUrl(resource.sourceUrl);
+    return send(res, 200, await store.addResource(resource));
+  }
+
+  if (method === "DELETE" && parts[0] === "api" && parts[1] === "resources" && parts[2]) {
+    const ok = await store.removeResource(me!.id, parts[2]);
+    if (!ok) throw new HttpError(404, "资源不存在");
+    return send(res, 200, { ok: true });
+  }
+
+  // 用户点「获取」：没有自己的链接就先转存+建分享，然后返回
+  if (method === "POST" && parts[0] === "api" && parts[1] === "resources" && parts[2] && parts[3] === "claim") {
+    const resource = await store.getResource(me!.id, parts[2]);
+    if (!resource) throw new HttpError(404, "资源不存在");
+    if (resource.ownUrl) {
+      await store.updateResource(me!.id, resource.id, { hits: resource.hits + 1 });
+      return send(res, 200, { url: resource.ownUrl, passcode: resource.ownPasscode ?? "" });
+    }
+    const row = await activeRow(me!.id);
+    const done = await resourceClaim.claimAndSave(me!.id, row.cookie, resource);
+    if (done.status === "failed") throw new HttpError(502, done.error || "转存失败");
+    await store.updateResource(me!.id, done.id, { hits: done.hits + 1 });
+    return send(res, 200, { url: done.ownUrl, passcode: done.ownPasscode ?? "" });
   }
 
   if (path.startsWith("/api/")) throw new HttpError(404, "接口不存在");

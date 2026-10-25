@@ -74,3 +74,30 @@ export type Session = {
   accounts: Account[];
   activeId: string | null;
 };
+
+/**
+ * 资源站条目：登记一条别人的分享，用户点「获取」时后端自动转存到号主网盘，
+ * 再生成号主自己的分享链接返回。
+ */
+export type Resource = {
+  id: string;
+  userId: string;
+  title: string;
+  description: string;
+  /** 原始分享链接（别人的） */
+  sourceUrl: string;
+  sourcePasscode: string;
+  platform: Platform;
+  /** 转存到号主网盘的哪个目录 */
+  toPdir: string;
+  /** 转存并重新分享后得到的链接，第一次获取时生成 */
+  ownUrl: string | null;
+  ownPasscode: string | null;
+  /** 已转存文件的 fid，用于建分享 */
+  ownFids: string[] | null;
+  status: "pending" | "ready" | "failed";
+  error: string | null;
+  hits: number;
+  createdAt: string;
+  updatedAt: string;
+};

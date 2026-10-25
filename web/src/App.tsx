@@ -9,6 +9,7 @@ import {
   type Capacity,
   type ShareGroup,
   type Platform,
+  type Resource,
 } from "../../shared/types.ts";
 
 const fmtCap = (n: number) => {
@@ -198,6 +199,8 @@ export default function App() {
   const [cap, setCap] = useState<Capacity | null>(null);
   // 目录大小：key 是 fid，后台算，算好再填
   const [sizes, setSizes] = useState<Record<string, DirSize>>({});
+  const [tab, setTab] = useState<"files" | "resources">("files");
+  const [resources, setResources] = useState<Resource[]>([]);
 
   const refreshSession = useCallback(async () => {
     setSession(await api.get<Session>("/api/session"));
@@ -245,6 +248,14 @@ export default function App() {
     }
   }, []);
 
+  const refreshResources = useCallback(async () => {
+    try {
+      setResources(await api.get<Resource[]>("/api/resources"));
+    } catch {
+      setResources([]);
+    }
+  }, []);
+
   useEffect(() => {
     api
       .get<AuthState>("/api/auth")
@@ -266,7 +277,8 @@ export default function App() {
     refreshFiles("0").catch((e: Error) => setError(e.message));
     refreshShares().catch(() => {});
     refreshCap().catch(() => {});
-  }, [activeId, refreshFiles, refreshShares, refreshCap]);
+    refreshResources().catch(() => {});
+  }, [activeId, refreshFiles, refreshShares, refreshCap, refreshResources]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -475,6 +487,32 @@ export default function App() {
       return next;
     });
 
+  const addResource = () =>
+    run(async () => {
+      const sourceUrl = window.prompt("粘贴别人的分享链接（如 https://pan.quark.cn/s/xxx）");
+      if (!sourceUrl?.trim()) return;
+      const title = window.prompt("资源标题", "未命名资源") || "未命名资源";
+      const sourcePasscode = window.prompt("提取码（没有就留空）", "") || "";
+      await api.post("/api/resources", { title, sourceUrl, sourcePasscode });
+      await refreshResources();
+    });
+
+  // 点「获取」：第一次会触发转存+建分享，可能要等几秒
+  const claimResource = (r: Resource) =>
+    run(async () => {
+      const res = await api.post<{ url: string; passcode: string }>(`/api/resources/${r.id}/claim`);
+      await refreshResources();
+      await copy(`${res.url}${res.passcode ? ` 提取码 ${res.passcode}` : ""}`);
+      window.alert(`已生成你的分享链接并复制：\n${res.url}`);
+    });
+
+  const removeResource = (id: string) =>
+    run(async () => {
+      if (!window.confirm("删除这条资源？已生成的分享链接不会失效。")) return;
+      await api.del(`/api/resources/${id}`);
+      await refreshResources();
+    });
+
   const selected = [...checked];
 
   if (!auth) return <div className="app" />;
@@ -632,7 +670,66 @@ export default function App() {
 
       {cap && cap.total > 0 && <CapacityCard cap={cap} />}
 
-      {activeId ? (
+      {activeId && (
+        <div className="tabs">
+          <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
+            网盘
+          </button>
+          <button className={tab === "resources" ? "on" : ""} onClick={() => setTab("resources")}>
+            资源站 {resources.length > 0 && <span className="count">{resources.length}</span>}
+          </button>
+        </div>
+      )}
+
+      {activeId && tab === "resources" && (
+        <main>
+          <div className="files">
+            <div className="toolbar">
+              <button className="primary" onClick={addResource} disabled={busy}>
+                添加资源
+              </button>
+              <span className="hint">
+                用户点「获取」时，后端自动转存到你网盘并生成你的分享链接
+              </span>
+            </div>
+            {resources.length === 0 && (
+              <p className="hint">还没有资源。点「添加资源」粘贴别人的分享链接。</p>
+            )}
+            <ul className="resources">
+              {resources.map((r) => (
+                <li key={r.id}>
+                  <div className="res-head">
+                    <strong>{r.title}</strong>
+                    <span className={r.ownUrl ? "tag ok" : "tag"}>
+                      {r.status === "ready" ? "已就绪" : r.status === "failed" ? "失败" : "未转存"}
+                    </span>
+                  </div>
+                  {r.description && <p className="res-desc">{r.description}</p>}
+                  <small className="res-src">来源：{r.sourceUrl}</small>
+                  {r.ownUrl && (
+                    <small className="res-own">
+                      你的链接：<a href={r.ownUrl} target="_blank" rel="noreferrer">{r.ownUrl}</a>
+                      {r.ownPasscode && ` 提取码 ${r.ownPasscode}`}
+                      {` · 被获取 ${r.hits} 次`}
+                    </small>
+                  )}
+                  {r.error && <small className="res-err">{r.error}</small>}
+                  <div className="ops">
+                    <button onClick={() => claimResource(r)} disabled={busy}>
+                      {r.ownUrl ? "复制链接" : "转存并生成链接"}
+                    </button>
+                    <button className="danger" onClick={() => removeResource(r.id)} disabled={busy}>
+                      删除
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </main>
+      )}
+
+      {activeId && tab === "files" ? (
         <main>
         <div className="files">
           <nav>
@@ -750,7 +847,7 @@ export default function App() {
         </aside>
         </main>
       ) : (
-        <p className="empty">扫码登录后在这里浏览网盘资源</p>
+        !activeId && <p className="empty">扫码登录后在这里浏览网盘资源</p>
       )}
     </div>
   );

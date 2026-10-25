@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Account, Platform, Share, ShareGroup, PublicUser } from "../shared/types.ts";
+import type { Account, Platform, Resource, Share, ShareGroup, PublicUser } from "../shared/types.ts";
 
 export type UserRow = {
   id: string;
@@ -20,6 +20,7 @@ type Db = {
   accounts: Row[];
   shares: Share[];
   groups: ShareGroup[];
+  resources: Resource[];
   /** 旧版单用户时代的 activeId，第一个用户注册时继承 */
   legacyActiveId: string | null;
 };
@@ -37,6 +38,7 @@ async function load(): Promise<Db> {
       accounts: raw.accounts ?? [],
       shares: (raw.shares ?? []).map((s) => ({ ...s, groupId: s.groupId ?? null })),
       groups: raw.groups ?? [],
+      resources: raw.resources ?? [],
       // 老库的 activeId 是全局的，留给第一个注册的用户
       legacyActiveId: raw.activeId ?? null,
     };
@@ -46,7 +48,7 @@ async function load(): Promise<Db> {
       account: { ...r.account, platform: r.account.platform ?? "quark" },
     }));
   } catch {
-    cache = { users: [], accounts: [], shares: [], groups: [], legacyActiveId: null };
+    cache = { users: [], accounts: [], shares: [], groups: [], resources: [], legacyActiveId: null };
   }
   return cache;
 }
@@ -257,6 +259,45 @@ export async function assignShareGroup(
   if (!share) return false;
   if (groupId && !db.groups.some((g) => g.id === groupId && g.userId === userId)) return false;
   share.groupId = groupId;
+  await save(db);
+  return true;
+}
+
+// ---- 资源站 ----
+
+export async function listResources(userId: string): Promise<Resource[]> {
+  return (await load()).resources.filter((r) => r.userId === userId);
+}
+
+export async function getResource(userId: string, id: string): Promise<Resource | null> {
+  return (await load()).resources.find((r) => r.id === id && r.userId === userId) ?? null;
+}
+
+export async function addResource(resource: Resource): Promise<Resource> {
+  const db = await load();
+  db.resources.unshift(resource);
+  await save(db);
+  return resource;
+}
+
+export async function updateResource(
+  userId: string,
+  id: string,
+  patch: Partial<Resource>,
+): Promise<Resource | null> {
+  const db = await load();
+  const r = db.resources.find((x) => x.id === id && x.userId === userId);
+  if (!r) return null;
+  Object.assign(r, patch, { updatedAt: new Date().toISOString() });
+  await save(db);
+  return r;
+}
+
+export async function removeResource(userId: string, id: string): Promise<boolean> {
+  const db = await load();
+  const before = db.resources.length;
+  db.resources = db.resources.filter((r) => !(r.id === id && r.userId === userId));
+  if (db.resources.length === before) return false;
   await save(db);
   return true;
 }
