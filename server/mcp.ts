@@ -6,6 +6,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import * as store from "./store.ts";
 import * as quark from "./quark.ts";
+import * as resourceClaim from "./resource.ts";
+import type { Resource } from "../shared/types.ts";
 
 const server = new McpServer({ name: "quark-promo-hub", version: "0.1.0" });
 
@@ -13,6 +15,13 @@ async function cookie(): Promise<string> {
   const row = await store.getActiveAny();
   if (!row) throw new Error("还没有登录夸克账号，请先在网页端扫码登录");
   return row.cookie;
+}
+
+/** MCP 是本地单机工具，固定用第一个账号所属用户。 */
+async function uid(): Promise<string> {
+  const row = await store.getActiveAny();
+  if (!row?.account.userId) throw new Error("还没有登录网盘账号，请先在网页端扫码登录");
+  return row.account.userId;
 }
 
 const ok = (data: unknown) => ({
@@ -168,8 +177,100 @@ server.tool(
   }),
 );
 
-function human(n: number): string {
-  if (!n) return "-";
+// ---- 资源站：收集同行的分享链接，转存到自己网盘并生成自己的分享 ----
+
+server.tool(
+  "resource_list",
+  "列出已登记的资源（同行的分享链接），含状态和自己的分享链接",
+  {},
+  wrap(async () => {
+    const rows = await store.listResources(await uid());
+    return {
+      count: rows.length,
+      items: rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        sourceUrl: r.sourceUrl,
+        status: r.status,
+        ownUrl: r.ownUrl,
+        hits: r.hits,
+        error: r.error,
+      })),
+    };
+  }),
+);
+
+server.tool(
+  "resource_add",
+  "登记一条别人的分享链接。只是记录，不转存；要用 resource_claim 才真正转存到自己网盘",
+  {
+    title: z.string().describe("资源标题，如「2027 行测刷题营」"),
+    sourceUrl: z.string().describe("别人的分享链接，如 https://pan.quark.cn/s/xxx"),
+    sourcePasscode: z.string().optional().describe("提取码，没有就留空"),
+    description: z.string().optional(),
+    toPdir: z.string().optional().describe("转存到自己的哪个目录 fid，默认根目录 0"),
+  },
+  wrap(async (a: { title: string; sourceUrl: string; sourcePasscode?: string; description?: string; toPdir?: string }) => {
+    const row = await store.getActiveAny();
+    if (!row?.account.userId) throw new Error("还没有登录网盘账号");
+    // 先解析，链接不合法就别存进库
+    quark.parseShareUrl(a.sourceUrl);
+    const now = new Date().toISOString();
+    const resource: Resource = {
+      id: crypto.randomUUID(),
+      userId: row.account.userId,
+      title: a.title,
+      description: a.description ?? "",
+      sourceUrl: a.sourceUrl,
+      sourcePasscode: a.sourcePasscode ?? "",
+      platform: row.account.platform,
+      toPdir: a.toPdir || "0",
+      ownUrl: null,
+      ownPasscode: null,
+      ownFids: null,
+      status: "pending",
+      error: null,
+      hits: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await store.addResource(resource);
+    return { ok: true, id: resource.id, title: resource.title };
+  }),
+);
+
+server.tool(
+  "resource_claim",
+  "把资源转存到自己的网盘，并生成自己的分享链接。第一次会真转存（大课程可能几十 GB），之后复用缓存的链接",
+  { id: z.string().describe("资源 id，来自 resource_list / resource_add") },
+  wrap(async ({ id }: { id: string }) => {
+    const userId = await uid();
+    const resource = await store.getResource(userId, id);
+    if (!resource) throw new Error("资源不存在");
+    if (resource.ownUrl) {
+      await store.updateResource(userId, id, { hits: resource.hits + 1 });
+      return { url: resource.ownUrl, passcode: resource.ownPasscode ?? "", cached: true };
+    }
+    const row = await store.getActiveAny();
+    const done = await resourceClaim.claimAndSave(userId, row!.cookie, resource);
+    if (done.status === "failed") throw new Error(done.error || "转存失败");
+    await store.updateResource(userId, id, { hits: done.hits + 1 });
+    return { url: done.ownUrl, passcode: done.ownPasscode ?? "", cached: false };
+  }),
+);
+
+server.tool(
+  "resource_remove",
+  "从资源站移除一条记录（已生成的分享链接不会失效，网盘里的文件也不会删）",
+  { id: z.string() },
+  wrap(async ({ id }: { id: string }) => {
+    const done = await store.removeResource(await uid(), id);
+    if (!done) throw new Error("资源不存在");
+    return { ok: true };
+  }),
+);
+
+function human(n: number): string {  if (!n) return "-";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
   let v = n;
