@@ -1,0 +1,19 @@
+[Unit]
+Description=Quark Promo Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/quark-promo-hub
+Environment=NODE_ENV=production
+Environment=PORT=5180
+EnvironmentFile=-/opt/quark-promo-hub/.env
+ExecStart=/usr/local/node22/bin/node server/index.ts
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
