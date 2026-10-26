@@ -94,11 +94,19 @@ printf 'APP_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
 }
 ```
 
-**网盘操作**：`quark_capacity`、`quark_list_files`、`quark_search`、`quark_create_folder`、`quark_rename`、`quark_delete`、`quark_create_share`、`quark_list_shares`、`quark_preview_share`、`quark_transfer`
+工具共 23 个，**全部支持夸克 / UC / 百度**（工具名沿用 `quark_` 前缀是历史原因，底层走平台适配层）：
 
-**资源站**：`resource_list`、`resource_add`、`resource_claim`、`resource_remove`
+| 分组 | 工具 |
+|---|---|
+| 网盘 | `quark_capacity`、`quark_list_files`、`quark_search`、`quark_create_folder`、`quark_rename`、`quark_delete`、`quark_download_link`、`quark_folder_size` |
+| 分享 | `quark_create_share`、`quark_list_shares`、`quark_preview_share`、`quark_transfer` |
+| 账号 | `account_list`、`account_switch`、`account_remove` |
+| 分组 | `share_group_create`、`share_group_delete`、`share_assign_group`、`share_remove` |
+| 资源站 | `resource_list`、`resource_add`、`resource_claim`、`resource_remove` |
 
 典型用法：让 AI 把一批同行链接丢进 `resource_add`，逐个 `resource_claim`，最后用 `resource_list` 汇总出自己的分享链接清单。
+
+注意：`fid` 在百度下就是完整路径（如 `/我的课程`），因为百度没有 fid 概念。
 
 ## 已知限制
 
