@@ -1,14 +1,59 @@
 // 资源站核心：把别人分享的文件转存到号主网盘，再生成号主自己的分享链接。
 // 只在第一次「获取」时做一次，结果写回 resource，后续直接返回缓存的链接。
+//
+// 夸克和 UC 的分享接口完全同构（sharepage/token → detail → save → share → password），
+// 只是域名和 pr 参数不同，所以共用同一套流程。百度签名机制不同，暂不支持。
 import * as quark from "./quark.ts";
+import * as uc from "./uc.ts";
 import * as store from "./store.ts";
-import type { Resource } from "../shared/types.ts";
+import type { Platform, Resource } from "../shared/types.ts";
+
+type ShareApi = {
+  parseShareUrl: (input: string) => { pwdId: string; passcode: string };
+  shareToken: (cookie: string, pwdId: string, passcode: string) => Promise<string>;
+  listShare: (
+    cookie: string,
+    pwdId: string,
+    stoken: string,
+    pdir: string,
+  ) => Promise<{
+    raw: { fid: string; file_name: string; dir: boolean; size: number; share_fid_token: string }[];
+    list: { fid: string; name: string; isDir: boolean; size: number }[];
+  }>;
+  saveShare: (
+    cookie: string,
+    pwdId: string,
+    stoken: string,
+    fidList: string[],
+    fidTokens: string[],
+    toPdir: string,
+  ) => Promise<void>;
+  createShare: (
+    cookie: string,
+    fids: string[],
+    title: string,
+  ) => Promise<{ shareId: string; url: string; passcode: string }>;
+  listFiles: (
+    cookie: string,
+    pdir: string,
+    page: number,
+    size: number,
+  ) => Promise<{ list: { fid: string; file_name: string; dir: boolean; size: number }[] }>;
+};
+
+const apis: Record<string, ShareApi> = {
+  quark: quark as unknown as ShareApi,
+  uc: uc as unknown as ShareApi,
+};
+
+export function shareApiFor(platform: Platform): ShareApi {
+  const api = apis[platform];
+  if (!api) throw new Error(`资源站暂不支持${platform}，目前仅夸克和 UC`);
+  return api;
+}
 
 /**
  * 转存并重新分享。返回自己的分享链接。
- *
- * 步骤：解析分享 → 取 stoken → 列内容 → 转存到指定目录 → 重新列目录拿新 fid
- * → 用新 fid 建分享。
  *
  * 为什么要重新列目录：转存接口只返回 task_id，不返回转存后的 fid，
  * 而建分享必须用「我网盘里的 fid」。
@@ -17,15 +62,16 @@ export async function claim(
   cookie: string,
   resource: Resource,
 ): Promise<{ url: string; passcode: string }> {
-  const { pwdId, passcode: urlPwd } = quark.parseShareUrl(resource.sourceUrl);
+  const api = shareApiFor(resource.platform);
+  const { pwdId, passcode: urlPwd } = api.parseShareUrl(resource.sourceUrl);
   const passcode = resource.sourcePasscode || urlPwd;
 
-  const stoken = await quark.shareToken(cookie, pwdId, passcode);
-  const { raw } = await quark.listShare(cookie, pwdId, stoken, "0");
+  const stoken = await api.shareToken(cookie, pwdId, passcode);
+  const { raw } = await api.listShare(cookie, pwdId, stoken, "0");
   if (!raw.length) throw new Error("分享内容为空");
 
   const names = raw.map((f) => String(f.file_name));
-  await quark.saveShare(
+  await api.saveShare(
     cookie,
     pwdId,
     stoken,
@@ -35,13 +81,13 @@ export async function claim(
   );
 
   // 转存是异步任务，saveShare 内部已等完成。这里按文件名回查新 fid。
-  const listed = await quark.listFiles(cookie, resource.toPdir || "0", 1, 100);
+  const listed = await api.listFiles(cookie, resource.toPdir || "0", 1, 100);
   const fids = listed.list
     .filter((f) => names.includes(String(f.file_name)))
     .map((f) => String(f.fid));
   if (!fids.length) throw new Error("转存后没在目标目录找到文件，可能被同名文件占用");
 
-  const created = await quark.createShare(cookie, fids, resource.title);
+  const created = await api.createShare(cookie, fids, resource.title);
   return { url: created.url, passcode: created.passcode };
 }
 

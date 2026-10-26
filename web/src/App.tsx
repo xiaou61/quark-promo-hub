@@ -418,7 +418,7 @@ export default function App() {
 
   const share = (list: string[]) =>
     run(async () => {
-      const title = window.prompt("分享标题", "夸克分享") ?? "夸克分享";
+      const title = window.prompt("分享标题", "我的分享") ?? "我的分享";
       await api.post("/api/shares", { fids: list, title });
       await refreshShares();
       window.alert("已创建分享，见右侧列表");

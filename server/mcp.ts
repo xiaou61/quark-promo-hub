@@ -214,7 +214,7 @@ server.tool(
     const row = await store.getActiveAny();
     if (!row?.account.userId) throw new Error("还没有登录网盘账号");
     // 先解析，链接不合法就别存进库
-    quark.parseShareUrl(a.sourceUrl);
+    resourceClaim.shareApiFor(row.account.platform).parseShareUrl(a.sourceUrl);
     const now = new Date().toISOString();
     const resource: Resource = {
       id: crypto.randomUUID(),

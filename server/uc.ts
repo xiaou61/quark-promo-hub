@@ -178,9 +178,11 @@ async function waitTask(cookie: string, taskId: string): Promise<void> {
   throw new UcError("UC 任务超时", -3);
 }
 
-/** 拿下载直链。返回的 URL 必须带 DL_UA 才能下载。 */
+/** 拿下载直链。返回的 URL 必须带 downloadHeaders 才能下载。 */
 export async function downloadUrl(cookie: string, fid: string): Promise<string> {
-  const d = await call<{ download_url: string }[]>(cookie, "/file/download", {
+  // 必须和下载用同一套 cookie，否则 CDN 校验对不上
+  const full = await ensureDownloadCookie(cookie);
+  const d = await call<{ download_url: string }[]>(full, "/file/download", {
     method: "POST",
     query: { entry: "ft" },
     body: { fids: [fid] },
@@ -196,8 +198,153 @@ export async function downloadHeaders(cookie: string) {
   return {
     "user-agent": DL_UA,
     referer: "https://drive.uc.cn/",
-    cookie,
+    cookie: await ensureDownloadCookie(cookie),
   };
+}
+
+/**
+ * 补全 __puus。和夸克同一个毛病：CDN 回调校验登录态，手工粘的 cookie 常缺这个字段。
+ * 实测 /member 会通过 Set-Cookie 下发。结果按原始 cookie 缓存，保证取链接和下载用同一套。
+ */
+const warmed = new Map<string, string>();
+
+export async function ensureDownloadCookie(cookie: string): Promise<string> {
+  if (cookie.includes("__puus=")) return cookie;
+  const key = cookie.slice(-32);
+  const hit = warmed.get(key);
+  if (hit) return hit;
+
+  const jar = new Map<string, string>();
+  for (const c of cookie.split(";")) {
+    const i = c.indexOf("=");
+    if (i > 0) jar.set(c.slice(0, i).trim(), c.slice(i + 1).trim());
+  }
+
+  const url = new URL(BASE + "/member");
+  url.searchParams.set("pr", "UCBrowser");
+  url.searchParams.set("fr", "pc");
+  const res = await fetch(url, { headers: { ...HEADERS, cookie } });
+  for (const raw of res.headers.getSetCookie?.() ?? []) {
+    const [pair] = raw.split(";");
+    const i = pair.indexOf("=");
+    if (i > 0) jar.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+  }
+  const full = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
+  if (jar.has("__puus")) warmed.set(key, full);
+  return full;
+}
+
+// ---- 分享 ----
+
+export async function createShare(
+  cookie: string,
+  fids: string[],
+  title: string,
+): Promise<{ shareId: string; url: string; passcode: string }> {
+  const task = await call<{ task_id: string }>(cookie, "/share", {
+    method: "POST",
+    body: { fid_list: fids, title, url_type: 1, expired_type: 1 },
+  });
+
+  // 分享是异步任务，和夸克一样查 /task
+  let shareId = "";
+  for (let i = 0; i < 20; i++) {
+    const t = await call<{ status: number; share_id?: string; message?: string }>(cookie, "/task", {
+      query: { task_id: task.task_id, retry_index: i },
+    });
+    if (t.status === 2 && t.share_id) {
+      shareId = t.share_id;
+      break;
+    }
+    if (t.status === 3) throw new UcError(t.message || "UC 分享任务失败", -4);
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  if (!shareId) throw new UcError("UC 分享任务超时", -5);
+
+  const info = await call<{ share_url?: string; pwd_id?: string; passcode?: string }>(
+    cookie,
+    "/share/password",
+    { method: "POST", body: { share_id: shareId } },
+  );
+  return {
+    shareId,
+    url: info.share_url || `https://drive.uc.cn/s/${info.pwd_id ?? shareId}`,
+    passcode: info.passcode ?? "",
+  };
+}
+
+export type ShareEntry = { fid: string; name: string; isDir: boolean; size: number };
+export type ShareRaw = { fid: string; file_name: string; dir: boolean; size: number; share_fid_token: string };
+
+export async function shareToken(cookie: string, pwdId: string, passcode: string): Promise<string> {
+  const d = await call<{ stoken?: string }>(cookie, "/share/sharepage/token", {
+    method: "POST",
+    body: { pwd_id: pwdId, passcode },
+  });
+  if (!d.stoken) throw new UcError("无法获取分享 token（链接无效或提取码错误）", -12);
+  return d.stoken;
+}
+
+export async function listShare(
+  cookie: string,
+  pwdId: string,
+  stoken: string,
+  pdir: string,
+): Promise<{ list: ShareEntry[]; raw: ShareRaw[] }> {
+  const d = await call<{ list?: ShareRaw[] }>(cookie, "/share/sharepage/detail", {
+    query: {
+      pwd_id: pwdId,
+      stoken,
+      pdir_fid: pdir,
+      _page: 1,
+      _size: 100,
+      _fetch_total: 1,
+      _sort: "file_type:asc,updated_at:desc",
+    },
+  });
+  const raw = d.list ?? [];
+  return {
+    raw,
+    list: raw.map((f) => ({
+      fid: String(f.fid),
+      name: String(f.file_name),
+      isDir: Boolean(f.dir),
+      size: Number(f.size ?? 0),
+    })),
+  };
+}
+
+export async function saveShare(
+  cookie: string,
+  pwdId: string,
+  stoken: string,
+  fidList: string[],
+  fidTokens: string[],
+  toPdir: string,
+): Promise<void> {
+  const d = await call<{ task_id?: string }>(cookie, "/share/sharepage/save", {
+    method: "POST",
+    body: {
+      fid_list: fidList,
+      fid_token_list: fidTokens,
+      to_pdir_fid: toPdir,
+      pwd_id: pwdId,
+      stoken,
+      pdir_fid: "0",
+      scene: "link",
+    },
+  });
+  if (d.task_id) await waitTask(cookie, d.task_id);
+}
+
+/** 从分享链接里取 pwd_id：https://drive.uc.cn/s/<pwd_id> */
+export function parseShareUrl(input: string): { pwdId: string; passcode: string } {
+  const text = input.trim();
+  const hit = text.match(/drive\.uc\.cn\/s\/([0-9a-zA-Z]+)/);
+  const pwdId = hit ? hit[1] : text.match(/^[0-9a-zA-Z]{8,}$/)?.[0] ?? "";
+  if (!pwdId) throw new UcError("无法识别 UC 分享链接", -13);
+  const pwd = text.match(/(?:提取码|密码|pwd)[^\w]{0,4}([0-9a-zA-Z]{4})/);
+  return { pwdId, passcode: pwd ? pwd[1] : "" };
 }
 
 // ---- 扫码登录 ----

@@ -263,25 +263,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Prom
   // 转存别人分享到自己网盘：先取 stoken，再列出内容，最后 save
   if (method === "POST" && path === "/api/transfer") {
     const row = await activeRow(me!.id);
-    if (row.account.platform !== "quark") {
-      throw new HttpError(400, "转存目前只支持夸克网盘");
-    }
+    const api = resourceClaim.shareApiFor(row.account.platform);
     const cookie = row.cookie;
     const b = await body(req);
-    const { pwdId, passcode: urlPwd } = quark.parseShareUrl(str(b.url, "url"));
+    const { pwdId, passcode: urlPwd } = api.parseShareUrl(str(b.url, "url"));
     const passcode = (typeof b.passcode === "string" && b.passcode) || urlPwd;
-    const stoken = await quark.shareToken(cookie, pwdId, passcode);
+    const stoken = await api.shareToken(cookie, pwdId, passcode);
 
     if (b.preview === true) {
-      const { list } = await quark.listShare(cookie, pwdId, stoken, "0");
+      const { list } = await api.listShare(cookie, pwdId, stoken, "0");
       return send(res, 200, { pwdId, stoken, items: list });
     }
 
-    const { raw } = await quark.listShare(cookie, pwdId, stoken, "0");
+    const { raw } = await api.listShare(cookie, pwdId, stoken, "0");
     if (!raw.length) throw new HttpError(400, "分享内容为空");
     const fidList = raw.map((f) => String(f.fid));
     const tokenList = raw.map((f) => String(f.share_fid_token));
-    await quark.saveShare(cookie, pwdId, stoken, fidList, tokenList, (b.to as string) || "0");
+    await api.saveShare(cookie, pwdId, stoken, fidList, tokenList, (b.to as string) || "0");
     return send(res, 200, { ok: true, count: fidList.length });
   }
 
@@ -414,14 +412,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Prom
 
   if (method === "POST" && path === "/api/shares") {
     const row = await activeRow(me!.id);
-    // 创建分享目前只实现了夸克，其他平台先明确拒绝，别让前端以为成功了
-    if (row.account.platform !== "quark") {
-      throw new HttpError(400, "当前账号所在平台还不支持创建分享，请切换到夸克账号");
-    }
+    const api = resourceClaim.shareApiFor(row.account.platform);
     const b = await body(req);
     const list = fids(b.fids);
-    const title = (typeof b.title === "string" && b.title.trim()) || "夸克分享";
-    const created = await quark.createShare(row.cookie, list, title);
+    const title = (typeof b.title === "string" && b.title.trim()) || "分享";
+    const created = await api.createShare(row.cookie, list, title);
     const share: Share = {
       id: randomUUID(),
       userId: me!.id,
@@ -472,7 +467,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Prom
       updatedAt: now,
     };
     // 先校验链接能不能解析，别把错的存进库
-    quark.parseShareUrl(resource.sourceUrl);
+    resourceClaim.shareApiFor(resource.platform).parseShareUrl(resource.sourceUrl);
     return send(res, 200, await store.addResource(resource));
   }
 
