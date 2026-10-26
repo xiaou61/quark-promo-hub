@@ -522,7 +522,7 @@ export default function App() {
       <div className="app">
         <div className="gate">
           <div className="logo">夸</div>
-          <h1>夸克网盘推广聚合</h1>
+          <h1>网盘推广聚合</h1>
           <p className="hint">{registerMode ? "注册新账号" : "请登录后使用"}</p>
           {error && (
             <div className="error" onClick={() => setError("")}>
@@ -579,7 +579,7 @@ export default function App() {
     <div className="app">
       <header>
         <span className="brand-dot" />
-        <h1>夸克网盘推广聚合</h1>
+        <h1>网盘推广聚合</h1>
         <span className={activeId ? "pill" : "pill off"}>
           {busy ? "处理中…" : activeId ? "已连接" : "未登录"}
         </span>

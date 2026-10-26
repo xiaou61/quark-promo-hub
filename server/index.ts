@@ -540,5 +540,5 @@ createServer((req, res) => {
     if (!res.headersSent) send(res, status, { error: message });
   });
 }).listen(PORT, () => {
-  console.log(`夸克网盘推广聚合 → http://localhost:${PORT}`);
+  console.log(`网盘推广聚合 → http://localhost:${PORT}`);
 });

@@ -1,5 +1,5 @@
 [Unit]
-Description=Quark Promo Hub
+Description=网盘推广聚合
 After=network-online.target
 Wants=network-online.target
 
