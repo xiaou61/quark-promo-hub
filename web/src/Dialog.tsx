@@ -31,6 +31,8 @@ export type DialogState =
       confirmText?: string;
       /** 要求用户原样输入这段文字才能确认，用于不可逆操作 */
       requireText?: string;
+      /** 逐项列出待操作对象（如批量删除的文件名） */
+      items?: { label: string; hint?: string; warn?: boolean }[];
       onConfirm: () => void | Promise<void>;
     }
   | {
@@ -124,6 +126,17 @@ export function Modal({ state, onClose }: { state: DialogState; onClose: () => v
 
         {state.kind === "alert" && state.copyText && (
           <textarea className="modal-copy" readOnly value={state.copyText} rows={3} />
+        )}
+
+        {state.kind === "confirm" && state.items && state.items.length > 0 && (
+          <ul className="modal-list">
+            {state.items.map((it, i) => (
+              <li key={i} className={it.warn ? "warn" : ""}>
+                <span className="modal-list-label">{it.label}</span>
+                {it.hint && <small>{it.hint}</small>}
+              </li>
+            ))}
+          </ul>
         )}
 
         {state.kind === "confirm" && state.requireText && (
