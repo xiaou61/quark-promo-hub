@@ -94,17 +94,61 @@ printf 'APP_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
 }
 ```
 
-工具共 23 个，**全部支持夸克 / UC / 百度**（工具名沿用 `quark_` 前缀是历史原因，底层走平台适配层）：
+工具共 23 个，**全部支持夸克 / UC / 百度**（工具名沿用 `quark_` 前缀是历史原因，底层走平台适配层，会自动用当前账号所在的平台）。
 
-| 分组 | 工具 |
-|---|---|
-| 网盘 | `quark_capacity`、`quark_list_files`、`quark_search`、`quark_create_folder`、`quark_rename`、`quark_delete`、`quark_download_link`、`quark_folder_size` |
-| 分享 | `quark_create_share`、`quark_list_shares`、`quark_preview_share`、`quark_transfer` |
-| 账号 | `account_list`、`account_switch`、`account_remove` |
-| 分组 | `share_group_create`、`share_group_delete`、`share_assign_group`、`share_remove` |
-| 资源站 | `resource_list`、`resource_add`、`resource_claim`、`resource_remove` |
+### 网盘操作
 
-典型用法：让 AI 把一批同行链接丢进 `resource_add`，逐个 `resource_claim`，最后用 `resource_list` 汇总出自己的分享链接清单。
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `quark_capacity` | — | 容量：总量 / 已用 / 会员类型 / 到期时间 / 容量构成 |
+| `quark_list_files` | `pdir?` | 列目录，返回文件名、是否目录、大小、可读的大小文本。`pdir` 传目录 fid，根目录用 `0` |
+| `quark_search` | `keyword`, `pdir?` | 在当前目录里按文件名过滤（没有全盘搜索接口） |
+| `quark_create_folder` | `name`, `pdir?` | 新建文件夹 |
+| `quark_rename` | `fid`, `name` | 重命名文件或文件夹 |
+| `quark_delete` | `fids[]` | 批量删除（进回收站，不是永久删除） |
+| `quark_download_link` | `fid` | 获取下载直链。UC/百度的直链必须用下载器或服务端代理，浏览器直接打开会 403 |
+| `quark_folder_size` | `fid` | 递归统计目录大小（文件数、子目录数）。大目录会返回 `running`，稍后再查同一目录拿结果 |
+
+### 分享
+
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `quark_create_share` | `fids[]`, `title?` | 对指定文件创建分享链接，同时记进本地分享列表 |
+| `quark_list_shares` | — | 列出已记录的分享（含链接、提取码、所属分组） |
+| `quark_preview_share` | `url`, `passcode?` | 预览别人的分享里有什么，不转存 |
+| `quark_transfer` | `url`, `passcode?`, `to?` | 把别人的分享转存到自己网盘，`to` 是目标目录 |
+
+### 账号
+
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `account_list` | — | 列出已登录的网盘账号，标出当前使用中的那个 |
+| `account_switch` | `id` | 切换当前使用的账号（切换后所有网盘工具都走新账号的平台） |
+| `account_remove` | `id` | 解除账号绑定（只删本地记录，不动网盘里的文件） |
+
+### 分享分组
+
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `share_group_create` | `name` | 新建分组 |
+| `share_group_delete` | `id` | 删除分组，组内分享退回未分组（分享本身不失效） |
+| `share_assign_group` | `shareId`, `groupId?` | 把一条分享移到指定分组，`groupId` 留空则退回未分组 |
+| `share_remove` | `id` | 删除本地分享记录（线上链接仍然有效） |
+
+### 资源站
+
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `resource_list` | — | 列出已登记的资源：标题、来源链接、状态、自己的分享链接、被获取次数 |
+| `resource_add` | `title`, `sourceUrl`, `sourcePasscode?`, `description?`, `toPdir?` | 登记一条别人的分享链接（只记录，不转存；会先校验链接合法性） |
+| `resource_claim` | `id` | 转存到自己网盘并生成自己的分享链接。首次真转存，之后复用缓存，秒回 |
+| `resource_remove` | `id` | 移除资源记录（不删网盘文件，已生成的分享不失效） |
+
+### 典型用法
+
+让 AI 把一批同行链接丢进 `resource_add`，逐个 `resource_claim`，最后用 `resource_list` 汇总出自己的分享链接清单。
+
+也可以让 AI 先 `quark_list_files` 看有什么、`quark_folder_size` 算占用、`quark_download_link` 拿直链、`quark_transfer` 搬家。
 
 注意：`fid` 在百度下就是完整路径（如 `/我的课程`），因为百度没有 fid 概念。
 
