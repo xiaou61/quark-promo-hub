@@ -432,18 +432,44 @@ export default function App() {
 
   // 删除确认里要显示文件名，从当前列表里查
   const itemName = (fid: string) => items.find((i) => i.fid === fid)?.name ?? fid;
+  const itemOf = (fid: string) => items.find((i) => i.fid === fid);
 
-  const remove = (list: string[]) =>
+  const remove = (list: string[]) => {
+    const picked = list.map((fid) => itemOf(fid)).filter(Boolean) as FileItem[];
+    const dirs = picked.filter((i) => i.isDir);
+    const files = picked.filter((i) => !i.isDir);
+    // 空目录一眼看不出区别，单独标出来
+    const emptyDirs = dirs.filter((d) => {
+      const s = sizes[d.fid];
+      return s?.status === "done" && s.files === 0;
+    });
+
+    // 单个目标用文件名确认，批量用「删除N项」，避免用户看都没看就过
+    const requireText =
+      list.length === 1 ? itemName(list[0]) : `删除${list.length}项`;
+
+    const parts = [`文件会进回收站，可在网盘里恢复。`];
+    if (dirs.length && files.length) parts.unshift(`选中含 ${dirs.length} 个文件夹、${files.length} 个文件。`);
+    if (emptyDirs.length) parts.push(`其中 ${emptyDirs.length} 个是空文件夹。`);
+
     setDialog({
       kind: "confirm",
       title: "确认删除",
-      desc:
-        list.length === 1
-          ? `将删除「${itemName(list[0])}」。文件会进回收站，可在网盘里恢复。`
-          : `将删除选中的 ${list.length} 项。文件会进回收站，可在网盘里恢复。`,
+      desc: parts.join(" "),
       danger: true,
       confirmText: "删除",
-      requireText: "删除",
+      requireText,
+      items: picked.map((i) => ({
+        label: i.name,
+        hint: i.isDir
+          ? sizes[i.fid]?.status === "done"
+            ? sizes[i.fid].files === 0
+              ? "空文件夹"
+              : `${sizes[i.fid].files} 个文件`
+            : "文件夹"
+          : fmtSize(i.size),
+        warn: i.isDir && sizes[i.fid]?.status === "done" && sizes[i.fid].files === 0,
+      })),
       onConfirm: () =>
         run(async () => {
           await api.post("/api/delete", { fids: list });
@@ -451,6 +477,7 @@ export default function App() {
           toast(`已删除 ${list.length} 项`);
         }),
     });
+  };
 
   const share = (list: string[]) =>
     setDialog({
@@ -589,7 +616,7 @@ export default function App() {
       desc: `「${title}」将从资源站移除。已生成的分享链接不会失效，网盘里的文件也不会删。`,
       danger: true,
       confirmText: "删除",
-      requireText: "删除",
+      requireText: title,
       onConfirm: () =>
         run(async () => {
           await api.del(`/api/resources/${id}`);
@@ -911,6 +938,7 @@ export default function App() {
                         desc: `「${g.name}」将被删除，组内 ${inGroup.length} 条分享会退回未分组（分享本身不会失效）。`,
                         danger: true,
                         confirmText: "删除",
+                        requireText: g.name,
                         onConfirm: () =>
                           run(async () => {
                             await api.del(`/api/groups/${g.id}`);
