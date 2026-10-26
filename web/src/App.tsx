@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AuthState } from "./api.ts";
+import { Modal, Toasts, type DialogState, type Toast } from "./Dialog.tsx";
 import {
   PLATFORM_NAMES,
   type Account,
@@ -201,6 +202,8 @@ export default function App() {
   const [sizes, setSizes] = useState<Record<string, DirSize>>({});
   const [tab, setTab] = useState<"files" | "resources">("files");
   const [resources, setResources] = useState<Resource[]>([]);
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
 
   const refreshSession = useCallback(async () => {
     setSession(await api.get<Session>("/api/session"));
@@ -280,7 +283,7 @@ export default function App() {
     refreshResources().catch(() => {});
   }, [activeId, refreshFiles, refreshShares, refreshCap, refreshResources]);
 
-  async function run(fn: () => Promise<void>) {
+  const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError("");
     try {
@@ -290,7 +293,13 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }
+  };
+
+  const toast = useCallback((text: string, tone: "ok" | "err" = "ok") => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, text, tone }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 2600);
+  }, []);
 
   const loginWithPassword = () =>
     run(async () => {
@@ -394,51 +403,87 @@ export default function App() {
   };
 
   const newFolder = () =>
-    run(async () => {
-      const name = window.prompt("新建文件夹名称");
-      if (!name?.trim()) return;
-      await api.post("/api/folder", { pdir, name });
-      await refreshFiles(pdir);
+    setDialog({
+      kind: "form",
+      title: "新建文件夹",
+      fields: [{ name: "name", label: "文件夹名称", required: true }],
+      confirmText: "创建",
+      onSubmit: (v) =>
+        run(async () => {
+          await api.post("/api/folder", { pdir, name: v.name.trim() });
+          await refreshFiles(pdir);
+        }),
     });
 
   const rename = (item: FileItem) =>
-    run(async () => {
-      const name = window.prompt("新名称", item.name);
-      if (!name?.trim() || name === item.name) return;
-      await api.post("/api/rename", { fid: item.fid, name });
-      await refreshFiles(pdir);
+    setDialog({
+      kind: "form",
+      title: "重命名",
+      fields: [{ name: "name", label: "新名称", value: item.name, required: true }],
+      confirmText: "保存",
+      onSubmit: (v) =>
+        run(async () => {
+          const name = v.name.trim();
+          if (!name || name === item.name) return;
+          await api.post("/api/rename", { fid: item.fid, name });
+          await refreshFiles(pdir);
+        }),
     });
 
   const remove = (list: string[]) =>
-    run(async () => {
-      if (!window.confirm(`确认删除选中的 ${list.length} 项？`)) return;
-      await api.post("/api/delete", { fids: list });
-      await refreshFiles(pdir);
+    setDialog({
+      kind: "confirm",
+      title: "确认删除",
+      desc: `将删除选中的 ${list.length} 项，文件会进回收站，可在网盘里恢复。`,
+      danger: true,
+      confirmText: "删除",
+      onConfirm: () =>
+        run(async () => {
+          await api.post("/api/delete", { fids: list });
+          await refreshFiles(pdir);
+          toast(`已删除 ${list.length} 项`);
+        }),
     });
 
   const share = (list: string[]) =>
-    run(async () => {
-      const title = window.prompt("分享标题", "我的分享") ?? "我的分享";
-      await api.post("/api/shares", { fids: list, title });
-      await refreshShares();
-      window.alert("已创建分享，见右侧列表");
+    setDialog({
+      kind: "form",
+      title: "创建分享",
+      desc: `将为选中的 ${list.length} 项创建分享链接，固定带提取码、永久有效。`,
+      fields: [{ name: "title", label: "分享标题", value: "我的分享", required: true }],
+      confirmText: "创建",
+      onSubmit: (v) =>
+        run(async () => {
+          await api.post("/api/shares", { fids: list, title: v.title.trim() });
+          await refreshShares();
+          toast("分享已创建");
+        }),
     });
 
   const copy = async (text: string) => {
     const ok = await copyText(text);
-    if (!ok) window.prompt("复制失败，请手动复制：", text);
+    if (ok) toast("已复制到剪贴板");
+    else
+      setDialog({
+        kind: "alert",
+        title: "复制失败",
+        desc: "浏览器拒绝了剪贴板访问，请手动复制下面的内容：",
+        copyText: text,
+      });
   };
 
-  // 拿直链。百度/UC 的直链必须带特定 UA 才能下，浏览器直接开会 403，
+  // 拿直链。UC/百度的直链必须带特定 UA 才能下，浏览器直接开会 403，
   // 所以优先复制给下载器，同时提供直接打开。
   const download = (item: FileItem) =>
     run(async () => {
       const { url } = await api.post<{ url: string }>("/api/download", { fid: item.fid });
-      // 只复制直链本身，带上文件名会让下载器把整串当成 URL
-      await copy(url);
-      window.alert(
-        `直链已复制（${item.name}）\n\n粘到 IDM / 迅雷 / Motrix 等下载器使用。\n浏览器直接打开会 403，因为登录 cookie 在服务端。`,
-      );
+      const ok = await copyText(url);
+      setDialog({
+        kind: "alert",
+        title: ok ? "直链已复制" : "直链已获取",
+        desc: `${item.name}\n\n粘到 IDM / 迅雷 / Motrix 等下载器使用。浏览器直接打开会 403，因为登录 cookie 在服务端。`,
+        copyText: url,
+      });
     });
 
   // 走服务端代理：cookie 由后端补上，浏览器能直接下，代价是占服务器带宽
@@ -461,11 +506,16 @@ export default function App() {
   };
 
   const newGroup = () =>
-    run(async () => {
-      const name = window.prompt("分组名称");
-      if (!name?.trim()) return;
-      await api.post("/api/groups", { name });
-      await refreshShares();
+    setDialog({
+      kind: "form",
+      title: "新建分组",
+      fields: [{ name: "name", label: "分组名称", required: true }],
+      confirmText: "创建",
+      onSubmit: (v) =>
+        run(async () => {
+          await api.post("/api/groups", { name: v.name.trim() });
+          await refreshShares();
+        }),
     });
 
   const assignGroup = (shareId: string, groupId: string | null) =>
@@ -488,13 +538,26 @@ export default function App() {
     });
 
   const addResource = () =>
-    run(async () => {
-      const sourceUrl = window.prompt("粘贴别人的分享链接（如 https://pan.quark.cn/s/xxx）");
-      if (!sourceUrl?.trim()) return;
-      const title = window.prompt("资源标题", "未命名资源") || "未命名资源";
-      const sourcePasscode = window.prompt("提取码（没有就留空）", "") || "";
-      await api.post("/api/resources", { title, sourceUrl, sourcePasscode });
-      await refreshResources();
+    setDialog({
+      kind: "form",
+      title: "添加资源",
+      desc: "粘贴同行的分享链接。用户点「获取」时会自动转存到你的网盘并生成你的链接。",
+      fields: [
+        { name: "sourceUrl", label: "分享链接", placeholder: "https://pan.quark.cn/s/xxx", required: true },
+        { name: "title", label: "资源标题", placeholder: "如：2027 行测刷题营", required: true },
+        { name: "sourcePasscode", label: "提取码（没有就留空）" },
+      ],
+      confirmText: "添加",
+      onSubmit: (v) =>
+        run(async () => {
+          await api.post("/api/resources", {
+            title: v.title.trim(),
+            sourceUrl: v.sourceUrl.trim(),
+            sourcePasscode: v.sourcePasscode.trim(),
+          });
+          await refreshResources();
+          toast("资源已添加");
+        }),
     });
 
   // 点「获取」：第一次会触发转存+建分享，可能要等几秒
@@ -502,15 +565,29 @@ export default function App() {
     run(async () => {
       const res = await api.post<{ url: string; passcode: string }>(`/api/resources/${r.id}/claim`);
       await refreshResources();
-      await copy(`${res.url}${res.passcode ? ` 提取码 ${res.passcode}` : ""}`);
-      window.alert(`已生成你的分享链接并复制：\n${res.url}`);
+      const text = `${res.url}${res.passcode ? ` 提取码 ${res.passcode}` : ""}`;
+      const ok = await copyText(text);
+      setDialog({
+        kind: "alert",
+        title: ok ? "已生成你的分享链接并复制" : "已生成你的分享链接",
+        desc: r.title,
+        copyText: text,
+      });
     });
 
-  const removeResource = (id: string) =>
-    run(async () => {
-      if (!window.confirm("删除这条资源？已生成的分享链接不会失效。")) return;
-      await api.del(`/api/resources/${id}`);
-      await refreshResources();
+  const removeResource = (id: string, title: string) =>
+    setDialog({
+      kind: "confirm",
+      title: "删除资源",
+      desc: `「${title}」将从资源站移除。已生成的分享链接不会失效，网盘里的文件也不会删。`,
+      danger: true,
+      confirmText: "删除",
+      onConfirm: () =>
+        run(async () => {
+          await api.del(`/api/resources/${id}`);
+          await refreshResources();
+          toast("资源已移除");
+        }),
     });
 
   const selected = [...checked];
@@ -718,7 +795,7 @@ export default function App() {
                     <button onClick={() => claimResource(r)} disabled={busy}>
                       {r.ownUrl ? "复制链接" : "转存并生成链接"}
                     </button>
-                    <button className="danger" onClick={() => removeResource(r.id)} disabled={busy}>
+                    <button className="danger" onClick={() => removeResource(r.id, r.title)} disabled={busy}>
                       删除
                     </button>
                   </div>
@@ -820,10 +897,18 @@ export default function App() {
                   <button
                     className="danger"
                     onClick={() =>
-                      run(async () => {
-                        if (!window.confirm(`删除分组「${g.name}」？组内分享会退回未分组`)) return;
-                        await api.del(`/api/groups/${g.id}`);
-                        await refreshShares();
+                      setDialog({
+                        kind: "confirm",
+                        title: "删除分组",
+                        desc: `「${g.name}」将被删除，组内 ${inGroup.length} 条分享会退回未分组（分享本身不会失效）。`,
+                        danger: true,
+                        confirmText: "删除",
+                        onConfirm: () =>
+                          run(async () => {
+                            await api.del(`/api/groups/${g.id}`);
+                            await refreshShares();
+                            toast("分组已删除");
+                          }),
                       })
                     }
                   >
@@ -849,6 +934,9 @@ export default function App() {
       ) : (
         !activeId && <p className="empty">扫码登录后在这里浏览网盘资源</p>
       )}
+
+      <Modal state={dialog} onClose={() => setDialog(null)} />
+      <Toasts items={toasts} />
     </div>
   );
 }
