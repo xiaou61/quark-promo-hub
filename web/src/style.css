@@ -1218,3 +1218,47 @@ main {
   font-weight: 600;
   font-family: inherit;
 }
+
+/* 批量操作的目标清单 */
+.modal-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: #f7f9fd;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.modal-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e6ebf4;
+}
+
+.modal-list li:last-child {
+  border-bottom: none;
+}
+
+.modal-list-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-list small {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 空文件夹：提醒用户这是删了个空目录 */
+.modal-list li.warn small {
+  color: #c0392b;
+}
