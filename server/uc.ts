@@ -166,6 +166,56 @@ export async function renameFile(cookie: string, fid: string, name: string): Pro
   await call(cookie, "/file/rename", { method: "POST", body: { fid, file_name: name } });
 }
 
+// 目录 size 恒为 0，只能递归累加。和夸克同一套逻辑。
+async function listAllPages(cookie: string, pdir: string): Promise<UcFile[]> {
+  const out: UcFile[] = [];
+  for (let page = 1; page <= 20; page++) {
+    let res: { list: UcFile[]; total: number } | null = null;
+    for (let attempt = 0; attempt < 3 && !res; attempt++) {
+      try {
+        res = await listFiles(cookie, pdir, page, 100);
+      } catch {
+        if (attempt === 2) throw new Error("目录读取失败，请稍后重试");
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+    if (!res) break;
+    out.push(...res.list);
+    if (out.length >= res.total || res.list.length === 0) break;
+  }
+  return out;
+}
+
+export async function folderSize(
+  cookie: string,
+  fid: string,
+  onProgress?: (dirs: number) => void,
+): Promise<{ size: number; files: number; dirs: number }> {
+  let size = 0;
+  let files = 0;
+  let dirs = 0;
+  let queue = [fid];
+
+  while (queue.length) {
+    const batch = queue.slice(0, 6);
+    queue = queue.slice(6);
+    const results = await Promise.all(batch.map((id) => listAllPages(cookie, id)));
+    for (const list of results) {
+      dirs++;
+      for (const it of list) {
+        if (it.dir) queue.push(it.fid);
+        else {
+          size += it.size;
+          files++;
+        }
+      }
+    }
+    onProgress?.(dirs);
+    if (queue.length) await new Promise((r) => setTimeout(r, 60));
+  }
+  return { size, files, dirs };
+}
+
 async function waitTask(cookie: string, taskId: string): Promise<void> {
   for (let i = 0; i < 20; i++) {
     const d = await call<{ status: number; message?: string }>(cookie, "/task", {

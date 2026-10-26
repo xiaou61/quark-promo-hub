@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseShareUrl as parseQuark } from "../server/quark.ts";
 import { parseShareUrl as parseUc } from "../server/uc.ts";
+import { parseShareUrl as parseBaidu } from "../server/baidu.ts";
 import { shareApiFor } from "../server/resource.ts";
 
-// 资源站按平台分发解析器。认错平台会把夸克链接丢给 UC 接口，必须分开测。
+// 资源站按平台分发解析器。认错平台会把链接丢给错误的接口，必须分开测。
 
 test("UC 分享链接", () => {
   const r = parseUc("https://drive.uc.cn/s/0324d6e3d40b4");
@@ -18,16 +19,31 @@ test("UC 链接带提取码", () => {
   assert.equal(r.passcode, "x9k2");
 });
 
-test("夸克和 UC 不能互相解析", () => {
-  assert.throws(() => parseUc("https://pan.quark.cn/s/0d150487c957"), /无法识别 UC 分享链接/);
-  assert.throws(() => parseQuark("https://drive.uc.cn/s/0324d6e3d40b4"), /无法识别分享链接/);
+test("百度链接去掉开头的 1（接口里的 surl 不带）", () => {
+  const r = parseBaidu("https://pan.baidu.com/s/1abcDEF123");
+  assert.equal(r.pwdId, "abcDEF123");
+  assert.equal(r.passcode, "");
 });
 
-test("按平台取到对应实现", () => {
-  assert.equal(shareApiFor("quark"), shareApiFor("quark"));
-  assert.notEqual(shareApiFor("quark"), shareApiFor("uc"));
+test("百度链接带提取码", () => {
+  const r = parseBaidu("https://pan.baidu.com/s/1abcDEF123 提取码：x9k2");
+  assert.equal(r.pwdId, "abcDEF123");
+  assert.equal(r.passcode, "x9k2");
 });
 
-test("百度不支持资源站，要明确报错", () => {
-  assert.throws(() => shareApiFor("baidu"), /暂不支持baidu/);
+test("三家不能互相解析", () => {
+  assert.throws(() => parseUc("https://pan.quark.cn/s/0d150487c957"), /无法识别 UC/);
+  assert.throws(() => parseQuark("https://drive.uc.cn/s/0324d6e3d40b4"), /无法识别/);
+  assert.throws(() => parseBaidu("https://pan.quark.cn/s/0d150487c957"), /无法识别百度/);
+  assert.throws(() => parseUc("https://pan.baidu.com/s/1abcDEF123"), /无法识别 UC/);
 });
+
+test("三个平台各有独立实现", () => {
+  const q = shareApiFor("quark");
+  const u = shareApiFor("uc");
+  const b = shareApiFor("baidu");
+  assert.notEqual(q, u);
+  assert.notEqual(u, b);
+  assert.notEqual(q, b);
+});
+

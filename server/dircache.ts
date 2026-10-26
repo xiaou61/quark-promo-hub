@@ -1,6 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import * as quark from "./quark.ts";
+import * as uc from "./uc.ts";
+import * as baidu from "./baidu.ts";
+import type { Platform } from "../shared/types.ts";
 
 // 目录大小要递归几千次请求，同步算会把请求挂死。
 // 这里放后台跑，结果缓存 30 分钟并落盘，服务重启后不用重算。
@@ -65,6 +68,7 @@ export async function start(
   accountId: string,
   fid: string,
   cookie: string,
+  platform: Platform = "quark",
 ): Promise<DirSizeState> {
   await load();
   const k = key(accountId, fid);
@@ -76,7 +80,8 @@ export async function start(
   cache.set(k, state);
   running.add(k);
 
-  quark
+  const mod = platform === "uc" ? uc : platform === "baidu" ? baidu : quark;
+  mod
     .folderSize(cookie, fid, (dirs) => {
       state.dirs = dirs;
     })

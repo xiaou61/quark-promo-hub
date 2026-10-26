@@ -224,12 +224,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Prom
     const row = (await store.getActive(me!.id))!;
     const fid = url.searchParams.get("fid") || "";
     if (!fid) throw new HttpError(400, "缺少 fid");
-    // 递归算目录大小目前只有夸克实现了；其他平台直接返回不可用
-    if (row.account.platform !== "quark") {
-      return send(res, 200, { status: "error", size: 0, files: 0, dirs: 0, updatedAt: Date.now() });
-    }
     // 已有结果直接返回，否则触发后台计算（不阻塞）
-    const state = (await dircache.peek(row.account.id, fid)) ?? (await dircache.start(row.account.id, fid, row.cookie));
+    const state =
+      (await dircache.peek(row.account.id, fid)) ??
+      (await dircache.start(row.account.id, fid, row.cookie, row.account.platform));
     return send(res, 200, state);
   }
 

@@ -174,6 +174,48 @@ export async function renameFile(cookie: string, path: string, name: string): Pr
   assertOk((await res.json()) as { errno: number; errmsg?: string });
 }
 
+// 百度目录的 size 恒为 0（和夸克/UC 一样），只能递归累加。
+// 参数是路径而不是 fid，所以递归时拼路径。
+export async function folderSize(
+  cookie: string,
+  path: string,
+  onProgress?: (dirs: number) => void,
+): Promise<{ size: number; files: number; dirs: number }> {
+  let size = 0;
+  let files = 0;
+  let dirs = 0;
+  let queue = [path && path !== "0" ? path : "/"];
+
+  while (queue.length) {
+    const batch = queue.slice(0, 6);
+    queue = queue.slice(6);
+    const results = await Promise.all(
+      batch.map(async (p) => {
+        const out: BaiduFile[] = [];
+        for (let page = 1; page <= 20; page++) {
+          const r = await listFiles(cookie, p, page, 100);
+          out.push(...r.list);
+          if (r.list.length < 100) break;
+        }
+        return out;
+      }),
+    );
+    for (const list of results) {
+      dirs++;
+      for (const it of list) {
+        if (it.isdir === 1) queue.push(it.path);
+        else {
+          size += it.size;
+          files++;
+        }
+      }
+    }
+    onProgress?.(dirs);
+    if (queue.length) await new Promise((r) => setTimeout(r, 60));
+  }
+  return { size, files, dirs };
+}
+
 /** 拿下载直链。百度的直链要先用 sign+timestamp 换，且必须带 DL_UA 才能下。 */
 export async function downloadUrl(cookie: string, fsId: string): Promise<string> {
   const token = await bdstoken(cookie);
@@ -232,6 +274,182 @@ export async function downloadHeaders(cookie: string) {
     "user-agent": DL_UA,
     referer: "https://pan.baidu.com/",
     cookie,
+  };
+}
+
+// ---- 分享 ----
+// 百度的分享体系和夸克/UC 完全不同：
+// - 链接是 /s/1xxxxxxxx（surl），不是 pwd_id
+// - 读分享要先从分享页 HTML 里抠出 shareid 和 share_uk
+// - 转存走 /share/transfer，参数含 sekey（有提取码时）
+// - 建分享走 /share/set，要 sign + timestamp + bdstoken
+
+/** 从 https://pan.baidu.com/s/1xxxx 里取 surl（去掉开头的 1） */
+export function parseShareUrl(input: string): { pwdId: string; passcode: string } {
+  const text = input.trim();
+  const hit = text.match(/pan\.baidu\.com\/s\/1([0-9a-zA-Z_-]+)/);
+  // 百度的 surl 在接口里不带开头的 1
+  const pwdId = hit ? hit[1] : text.match(/^1?([0-9a-zA-Z_-]{8,})$/)?.[1] ?? "";
+  if (!pwdId) throw new BaiduError("无法识别百度分享链接", -13);
+  const pwd = text.match(/(?:提取码|密码|pwd)[^\w]{0,4}([0-9a-zA-Z]{4})/);
+  return { pwdId, passcode: pwd ? pwd[1] : "" };
+}
+
+/** 分享页 HTML 里的 shareid / share_uk，转存和建分享都要用 */
+export async function shareInfo(
+  cookie: string,
+  surl: string,
+): Promise<{ shareId: string; uk: string }> {
+  const res = await fetch(`${PAN}/s/1${surl}`, {
+    headers: { ...HEADERS, cookie },
+  });
+  const html = await res.text();
+  const shareId = html.match(/"shareid":\s*"?(\d+)/)?.[1];
+  const uk = html.match(/"share_uk":\s*"?(\d+)/)?.[1];
+  if (!shareId || !uk) throw new BaiduError("无法从分享页解析出 shareid/uk", -14);
+  return { shareId, uk };
+}
+
+/** 有提取码时先 verify 换 sekey */
+export async function shareToken(
+  cookie: string,
+  surl: string,
+  passcode: string,
+): Promise<string> {
+  const token = await bdstoken(cookie);
+  if (!passcode) return "";
+  const res = await fetch(
+    `${PAN}/share/verify?surl=${encodeURIComponent(surl)}&t=${Date.now()}&bdstoken=${encodeURIComponent(token)}&channel=chunlei&clienttype=0&web=1&app_id=250528`,
+    {
+      method: "POST",
+      headers: { ...HEADERS, cookie, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ pwd: passcode }),
+    },
+  );
+  const json = (await res.json()) as { errno: number; randsk?: string };
+  if (json.errno !== 0 || !json.randsk) throw new BaiduError("提取码错误", json.errno || -15);
+  return json.randsk;
+}
+
+export type ShareRaw = {
+  fs_id: number;
+  server_filename: string;
+  isdir: number;
+  size: number;
+  path: string;
+};
+
+export async function listShare(
+  cookie: string,
+  surl: string,
+  sekey: string,
+  dir: string,
+): Promise<{ list: ShareRaw[]; raw: ShareRaw[] }> {
+  const token = await bdstoken(cookie);
+  const { shareId, uk } = await shareInfo(cookie, surl);
+  const url = new URL(`${PAN}/share/list`);
+  url.searchParams.set("shorturl", surl);
+  url.searchParams.set("root", "1");
+  url.searchParams.set("page", "1");
+  url.searchParams.set("num", "100");
+  url.searchParams.set("order", "time");
+  url.searchParams.set("desc", "1");
+  url.searchParams.set("showempty", "0");
+  url.searchParams.set("web", "1");
+  url.searchParams.set("channel", "chunlei");
+  url.searchParams.set("clienttype", "0");
+  url.searchParams.set("app_id", "250528");
+  url.searchParams.set("bdstoken", token);
+  url.searchParams.set("dir", dir || "/");
+  if (sekey) url.searchParams.set("sekey", sekey);
+
+  const res = await fetch(url, {
+    headers: { ...HEADERS, cookie, referer: `https://pan.baidu.com/s/1${surl}` },
+  });
+  const json = (await res.json()) as { errno: number; errmsg?: string; list?: ShareRaw[] };
+  assertOk(json);
+  const raw = json.list ?? [];
+  return { raw, list: raw };
+}
+
+export async function saveShare(
+  cookie: string,
+  surl: string,
+  sekey: string,
+  fsIds: string[],
+  _tokens: string[],
+  toPdir: string,
+): Promise<void> {
+  const token = await bdstoken(cookie);
+  const { shareId, uk } = await shareInfo(cookie, surl);
+  const body = new URLSearchParams({
+    fsidlist: JSON.stringify(fsIds.map(Number)),
+    path: toPdir && toPdir !== "0" ? toPdir : "/",
+  });
+  const url = new URL(`${PAN}/share/transfer`);
+  url.searchParams.set("shareid", shareId);
+  url.searchParams.set("from", uk);
+  url.searchParams.set("bdstoken", token);
+  url.searchParams.set("channel", "chunlei");
+  url.searchParams.set("clienttype", "0");
+  url.searchParams.set("web", "1");
+  url.searchParams.set("app_id", "250528");
+  if (sekey) url.searchParams.set("sekey", sekey);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...HEADERS, cookie, "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const json = (await res.json()) as { errno: number; errmsg?: string };
+  assertOk(json);
+}
+
+export async function createShare(
+  cookie: string,
+  fsIds: string[],
+  title: string,
+): Promise<{ shareId: string; url: string; passcode: string }> {
+  const token = await bdstoken(cookie);
+  const signJson = await get<{ data?: { sign?: string; timestamp?: number } }>(
+    cookie,
+    "/share/tplconfig",
+    { fields: "sign,timestamp", channel: "chunlei", web: 1, app_id: 250528, clienttype: 0, view_mode: 1 },
+  );
+  const sign = (signJson as { data?: { sign?: string } }).data?.sign;
+  const timestamp = (signJson as { data?: { timestamp?: number } }).data?.timestamp;
+  if (!sign || !timestamp) throw new BaiduError("百度没有返回 sign/timestamp", -2);
+
+  const body = new URLSearchParams({
+    period: "0",
+    pwd: "",
+    eflag: "0",
+    channel_list: "[]",
+    schannel: "4",
+    fid_list: JSON.stringify(fsIds.map(Number)),
+  });
+  const url = new URL(`${PAN}/share/set`);
+  url.searchParams.set("sign", sign);
+  url.searchParams.set("timestamp", String(timestamp));
+  url.searchParams.set("bdstoken", token);
+  url.searchParams.set("channel", "chunlei");
+  url.searchParams.set("clienttype", "0");
+  url.searchParams.set("web", "1");
+  url.searchParams.set("app_id", "250528");
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...HEADERS, cookie, "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const json = (await res.json()) as { errno: number; errmsg?: string; link?: string; shorturl?: string; pwd?: string };
+  assertOk(json);
+  const shorturl = json.shorturl ?? "";
+  if (!shorturl) throw new BaiduError("百度没有返回分享链接", -16);
+  return {
+    shareId: shorturl,
+    url: `https://pan.baidu.com/s/1${shorturl}`,
+    passcode: json.pwd ?? "",
   };
 }
 

@@ -5,6 +5,7 @@
 // 只是域名和 pr 参数不同，所以共用同一套流程。百度签名机制不同，暂不支持。
 import * as quark from "./quark.ts";
 import * as uc from "./uc.ts";
+import * as baidu from "./baidu.ts";
 import * as store from "./store.ts";
 import type { Platform, Resource } from "../shared/types.ts";
 
@@ -44,11 +45,43 @@ type ShareApi = {
 const apis: Record<string, ShareApi> = {
   quark: quark as unknown as ShareApi,
   uc: uc as unknown as ShareApi,
+  // 百度字段名不同（fs_id/server_filename/isdir），这里包一层归一化
+  baidu: {
+    parseShareUrl: baidu.parseShareUrl,
+    shareToken: baidu.shareToken,
+    saveShare: baidu.saveShare,
+    createShare: baidu.createShare,
+    listShare: async (cookie, surl, sekey, dir) => {
+      const { raw } = await baidu.listShare(cookie, surl, sekey, dir);
+      const norm = raw.map((f) => ({
+        fid: String(f.fs_id),
+        file_name: String(f.server_filename),
+        dir: f.isdir === 1,
+        size: Number(f.size ?? 0),
+        share_fid_token: "",
+      }));
+      return {
+        raw: norm,
+        list: norm.map((f) => ({ fid: f.fid, name: f.file_name, isDir: f.dir, size: f.size })),
+      };
+    },
+    listFiles: async (cookie, pdir, page, size) => {
+      const { list } = await baidu.listFiles(cookie, pdir, page, size);
+      return {
+        list: list.map((f) => ({
+          fid: f.path,
+          file_name: f.server_filename,
+          dir: f.isdir === 1,
+          size: Number(f.size ?? 0),
+        })),
+      };
+    },
+  },
 };
 
 export function shareApiFor(platform: Platform): ShareApi {
   const api = apis[platform];
-  if (!api) throw new Error(`资源站暂不支持${platform}，目前仅夸克和 UC`);
+  if (!api) throw new Error(`资源站暂不支持${platform}`);
   return api;
 }
 
