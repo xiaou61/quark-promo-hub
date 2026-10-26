@@ -29,6 +29,8 @@ export type DialogState =
       desc?: string;
       danger?: boolean;
       confirmText?: string;
+      /** 要求用户原样输入这段文字才能确认，用于不可逆操作 */
+      requireText?: string;
       onConfirm: () => void | Promise<void>;
     }
   | {
@@ -76,6 +78,18 @@ export function Modal({ state, onClose }: { state: DialogState; onClose: () => v
     }
   };
 
+  const doConfirm = async () => {
+    if (state.kind !== "confirm") return;
+    if (state.requireText && values.confirm?.trim() !== state.requireText) return;
+    setBusy(true);
+    try {
+      await state.onConfirm();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
@@ -112,6 +126,24 @@ export function Modal({ state, onClose }: { state: DialogState; onClose: () => v
           <textarea className="modal-copy" readOnly value={state.copyText} rows={3} />
         )}
 
+        {state.kind === "confirm" && state.requireText && (
+          <label className="modal-field">
+            <span>
+              请输入 <code className="modal-required">{state.requireText}</code> 确认
+            </span>
+            <input
+              ref={(el) => void (firstRef.current = el)}
+              value={values.confirm ?? ""}
+              placeholder={state.requireText}
+              autoComplete="off"
+              onChange={(e) => setValues({ ...values, confirm: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void doConfirm();
+              }}
+            />
+          </label>
+        )}
+
         <div className="modal-ops">
           {state.kind !== "alert" && (
             <button onClick={onClose} disabled={busy}>
@@ -126,16 +158,8 @@ export function Modal({ state, onClose }: { state: DialogState; onClose: () => v
           {state.kind === "confirm" && (
             <button
               className={state.danger ? "danger" : "primary"}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await state.onConfirm();
-                  onClose();
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              disabled={busy}
+              onClick={doConfirm}
+              disabled={busy || Boolean(state.requireText && values.confirm?.trim() !== state.requireText)}
             >
               {busy ? "处理中…" : state.confirmText ?? "确定"}
             </button>

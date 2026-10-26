@@ -430,13 +430,20 @@ export default function App() {
         }),
     });
 
+  // 删除确认里要显示文件名，从当前列表里查
+  const itemName = (fid: string) => items.find((i) => i.fid === fid)?.name ?? fid;
+
   const remove = (list: string[]) =>
     setDialog({
       kind: "confirm",
       title: "确认删除",
-      desc: `将删除选中的 ${list.length} 项，文件会进回收站，可在网盘里恢复。`,
+      desc:
+        list.length === 1
+          ? `将删除「${itemName(list[0])}」。文件会进回收站，可在网盘里恢复。`
+          : `将删除选中的 ${list.length} 项。文件会进回收站，可在网盘里恢复。`,
       danger: true,
       confirmText: "删除",
+      requireText: "删除",
       onConfirm: () =>
         run(async () => {
           await api.post("/api/delete", { fids: list });
@@ -582,6 +589,7 @@ export default function App() {
       desc: `「${title}」将从资源站移除。已生成的分享链接不会失效，网盘里的文件也不会删。`,
       danger: true,
       confirmText: "删除",
+      requireText: "删除",
       onConfirm: () =>
         run(async () => {
           await api.del(`/api/resources/${id}`);

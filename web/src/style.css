@@ -1208,3 +1208,13 @@ main {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: none; }
 }
+
+/* 二次确认里要求输入的文字 */
+.modal-required {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #fdeaea;
+  color: #c0392b;
+  font-weight: 600;
+  font-family: inherit;
+}
