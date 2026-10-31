@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AuthState } from "./api.ts";
 import { Modal, Toasts, type DialogState, type Toast } from "./Dialog.tsx";
+import Channels from "./Channels.tsx";
 import {
   PLATFORM_NAMES,
   type Account,
@@ -200,7 +201,15 @@ export default function App() {
   const [cap, setCap] = useState<Capacity | null>(null);
   // 目录大小：key 是 fid，后台算，算好再填
   const [sizes, setSizes] = useState<Record<string, DirSize>>({});
-  const [tab, setTab] = useState<"files" | "resources">("files");
+  // 控制台侧边栏视图：引流渠道 + 网盘推广项目的三页
+  type View = "channels" | "accounts" | "files" | "resources";
+  const [view, setView] = useState<View>("files");
+  const VIEW_TITLES: Record<View, string> = {
+    channels: "引流渠道",
+    accounts: "网盘账号",
+    files: "网盘文件",
+    resources: "资源站",
+  };
   const [resources, setResources] = useState<Resource[]>([]);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -633,8 +642,8 @@ export default function App() {
     return (
       <div className="app">
         <div className="gate">
-          <div className="logo">夸</div>
-          <h1>网盘推广聚合</h1>
+          <div className="logo">流</div>
+          <h1>线上流量探索</h1>
           <p className="hint">{registerMode ? "注册新账号" : "请登录后使用"}</p>
           {error && (
             <div className="error" onClick={() => setError("")}>
@@ -687,163 +696,201 @@ export default function App() {
     );
   }
 
+  const sideNav: { section: string; items: { id: View; label: string }[] }[] = [
+    {
+      section: "流量探索",
+      items: [{ id: "channels", label: "引流渠道" }],
+    },
+    {
+      section: "项目：网盘推广",
+      items: [
+        { id: "accounts", label: "网盘账号" },
+        { id: "files", label: "网盘文件" },
+        { id: "resources", label: "资源站" },
+      ],
+    },
+  ];
+
   return (
-    <div className="app">
-      <header>
-        <span className="brand-dot" />
-        <h1>网盘推广聚合</h1>
-        <span className={activeId ? "pill" : "pill off"}>
-          {busy ? "处理中…" : activeId ? "已连接" : "未登录"}
-        </span>
-        {session?.user && (
-          <span className="who">
-            {session.user.username}
-            <button className="link" onClick={logoutUser} disabled={busy}>
-              退出
-            </button>
-          </span>
-        )}
-      </header>
+    <div className="app wide">
+      <div className="shell">
+        <aside className="side">
+          <div className="side-brand">
+            线上流量探索
+            <small>引流渠道 · 项目控制台</small>
+          </div>
+          <nav>
+            {sideNav.map((sec) => (
+              <div key={sec.section} className="side-sec">
+                <div className="side-sec-label">{sec.section}</div>
+                {sec.items.map((it) => (
+                  <button
+                    key={it.id}
+                    className={view === it.id ? "on" : ""}
+                    onClick={() => setView(it.id)}
+                  >
+                    {it.label}
+                    {it.id === "resources" && resources.length > 0 && (
+                      <span className="count">{resources.length}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </nav>
+        </aside>
 
-      {error && (
-        <div className="error" onClick={() => setError("")}>
-          {error}
-        </div>
-      )}
-
-      <section className="scan">
-        {!activeId && !qr && !qrImg && (
-          <p className="hint" style={{ margin: "0 0 10px" }}>
-            还没有连接网盘账号，选择平台后扫码即可浏览和管理网盘资源
-          </p>
-        )}
-        {!qr && !qrImg ? (
-          <>
-            <div className="platforms">
-              {(Object.keys(PLATFORM_NAMES) as Platform[]).map((p) => (
-                <button
-                  key={p}
-                  className={scanPlatform === p ? "on" : ""}
-                  onClick={() => setScanPlatform(p)}
-                  disabled={busy}
-                >
-                  {PLATFORM_NAMES[p]}
+        <div className="maincol">
+          <div className="topbar">
+            <h1>{VIEW_TITLES[view]}</h1>
+            <span className={activeId ? "pill" : "pill off"}>
+              {busy ? "处理中…" : activeId ? "已连接" : "未登录"}
+            </span>
+            {session?.user && (
+              <span className="who">
+                {session.user.username}
+                <button className="link" onClick={logoutUser} disabled={busy}>
+                  退出
                 </button>
-              ))}
-            </div>
-            <button className={activeId ? "" : "primary"} onClick={startScan} disabled={busy}>
-              {activeId ? `添加另一个${PLATFORM_NAMES[scanPlatform]}账号` : `扫码登录${PLATFORM_NAMES[scanPlatform]}`}
-            </button>
-          </>
-        ) : (
-          <div className="qr-box">
-            {qrImg ? (
-              <img className="qr-img" src={qrImg} alt="登录二维码" />
-            ) : (
-              <div className="qr-img" dangerouslySetInnerHTML={{ __html: qr }} />
-            )}
-            <p className="hint">{scanHint}</p>
-            <button onClick={startScan} disabled={busy}>
-              刷新二维码
-            </button>
-          </div>
-        )}
-        <details className="manual">
-          <summary>或用 Cookie 登录</summary>
-          <div className="login">
-            <input
-              value={cookie}
-              onChange={(e) => setCookie(e.target.value)}
-              placeholder={`粘贴 ${PLATFORM_NAMES[scanPlatform]} 的 Cookie`}
-            />
-            <button onClick={login} disabled={busy || !cookie.trim()}>
-              登录
-            </button>
-          </div>
-        </details>
-      </section>
-
-      {session && session.accounts.length > 0 && (
-        <ul className="accounts">
-          {session.accounts.map((a: Account) => (
-            <li key={a.id} className={a.id === activeId ? "on" : ""}>
-              <button className="link" onClick={() => switchTo(a.id)}>
-                {a.nickname}
-              </button>
-              <span className="tag">{PLATFORM_NAMES[a.platform] ?? a.platform}</span>
-              <small>{a.cookieHint}</small>
-              <button className="del" onClick={() => logout(a.id)}>
-                移除
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {cap && cap.total > 0 && <CapacityCard cap={cap} />}
-
-      {activeId && (
-        <div className="tabs">
-          <button className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
-            网盘
-          </button>
-          <button className={tab === "resources" ? "on" : ""} onClick={() => setTab("resources")}>
-            资源站 {resources.length > 0 && <span className="count">{resources.length}</span>}
-          </button>
-        </div>
-      )}
-
-      {activeId && tab === "resources" && (
-        <main>
-          <div className="files">
-            <div className="toolbar">
-              <button className="primary" onClick={addResource} disabled={busy}>
-                添加资源
-              </button>
-              <span className="hint">
-                用户点「获取」时，后端自动转存到你网盘并生成你的分享链接
               </span>
-            </div>
-            {resources.length === 0 && (
-              <p className="hint">还没有资源。点「添加资源」粘贴别人的分享链接。</p>
             )}
-            <ul className="resources">
-              {resources.map((r) => (
-                <li key={r.id}>
-                  <div className="res-head">
-                    <strong>{r.title}</strong>
-                    <span className={r.ownUrl ? "tag ok" : "tag"}>
-                      {r.status === "ready" ? "已就绪" : r.status === "failed" ? "失败" : "未转存"}
+          </div>
+
+          <div className="view">
+            {error && (
+              <div className="error" onClick={() => setError("")}>
+                {error}
+              </div>
+            )}
+
+            {view === "channels" && <Channels toast={toast} />}
+
+            {view === "accounts" && (
+              <>
+                <section className="scan">
+                  {!activeId && !qr && !qrImg && (
+                    <p className="hint" style={{ margin: "0 0 10px" }}>
+                      还没有连接网盘账号，选择平台后扫码即可浏览和管理网盘资源
+                    </p>
+                  )}
+                  {!qr && !qrImg ? (
+                    <>
+                      <div className="platforms">
+                        {(Object.keys(PLATFORM_NAMES) as Platform[]).map((p) => (
+                          <button
+                            key={p}
+                            className={scanPlatform === p ? "on" : ""}
+                            onClick={() => setScanPlatform(p)}
+                            disabled={busy}
+                          >
+                            {PLATFORM_NAMES[p]}
+                          </button>
+                        ))}
+                      </div>
+                      <button className={activeId ? "" : "primary"} onClick={startScan} disabled={busy}>
+                        {activeId ? `添加另一个${PLATFORM_NAMES[scanPlatform]}账号` : `扫码登录${PLATFORM_NAMES[scanPlatform]}`}
+                      </button>
+                    </>
+                  ) : (
+                    <div className="qr-box">
+                      {qrImg ? (
+                        <img className="qr-img" src={qrImg} alt="登录二维码" />
+                      ) : (
+                        <div className="qr-img" dangerouslySetInnerHTML={{ __html: qr }} />
+                      )}
+                      <p className="hint">{scanHint}</p>
+                      <button onClick={startScan} disabled={busy}>
+                        刷新二维码
+                      </button>
+                    </div>
+                  )}
+                  <details className="manual">
+                    <summary>或用 Cookie 登录</summary>
+                    <div className="login">
+                      <input
+                        value={cookie}
+                        onChange={(e) => setCookie(e.target.value)}
+                        placeholder={`粘贴 ${PLATFORM_NAMES[scanPlatform]} 的 Cookie`}
+                      />
+                      <button onClick={login} disabled={busy || !cookie.trim()}>
+                        登录
+                      </button>
+                    </div>
+                  </details>
+                </section>
+
+                {session && session.accounts.length > 0 && (
+                  <ul className="accounts">
+                    {session.accounts.map((a: Account) => (
+                      <li key={a.id} className={a.id === activeId ? "on" : ""}>
+                        <button className="link" onClick={() => switchTo(a.id)}>
+                          {a.nickname}
+                        </button>
+                        <span className="tag">{PLATFORM_NAMES[a.platform] ?? a.platform}</span>
+                        <small>{a.cookieHint}</small>
+                        <button className="del" onClick={() => logout(a.id)}>
+                          移除
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {cap && cap.total > 0 && <CapacityCard cap={cap} />}
+              </>
+            )}
+
+            {view === "resources" && activeId && (
+              <main>
+                <div className="files">
+                  <div className="toolbar">
+                    <button className="primary" onClick={addResource} disabled={busy}>
+                      添加资源
+                    </button>
+                    <span className="hint">
+                      用户点「获取」时，后端自动转存到你网盘并生成你的分享链接
                     </span>
                   </div>
-                  {r.description && <p className="res-desc">{r.description}</p>}
-                  <small className="res-src">来源：{r.sourceUrl}</small>
-                  {r.ownUrl && (
-                    <small className="res-own">
-                      你的链接：<a href={r.ownUrl} target="_blank" rel="noreferrer">{r.ownUrl}</a>
-                      {r.ownPasscode && ` 提取码 ${r.ownPasscode}`}
-                      {` · 被获取 ${r.hits} 次`}
-                    </small>
+                  {resources.length === 0 && (
+                    <p className="hint">还没有资源。点「添加资源」粘贴别人的分享链接。</p>
                   )}
-                  {r.error && <small className="res-err">{r.error}</small>}
-                  <div className="ops">
-                    <button onClick={() => claimResource(r)} disabled={busy}>
-                      {r.ownUrl ? "复制链接" : "转存并生成链接"}
-                    </button>
-                    <button className="danger" onClick={() => removeResource(r.id, r.title)} disabled={busy}>
-                      删除
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </main>
-      )}
+                  <ul className="resources">
+                    {resources.map((r) => (
+                      <li key={r.id}>
+                        <div className="res-head">
+                          <strong>{r.title}</strong>
+                          <span className={r.ownUrl ? "tag ok" : "tag"}>
+                            {r.status === "ready" ? "已就绪" : r.status === "failed" ? "失败" : "未转存"}
+                          </span>
+                        </div>
+                        {r.description && <p className="res-desc">{r.description}</p>}
+                        <small className="res-src">来源：{r.sourceUrl}</small>
+                        {r.ownUrl && (
+                          <small className="res-own">
+                            你的链接：<a href={r.ownUrl} target="_blank" rel="noreferrer">{r.ownUrl}</a>
+                            {r.ownPasscode && ` 提取码 ${r.ownPasscode}`}
+                            {` · 被获取 ${r.hits} 次`}
+                          </small>
+                        )}
+                        {r.error && <small className="res-err">{r.error}</small>}
+                        <div className="ops">
+                          <button onClick={() => claimResource(r)} disabled={busy}>
+                            {r.ownUrl ? "复制链接" : "转存并生成链接"}
+                          </button>
+                          <button className="danger" onClick={() => removeResource(r.id, r.title)} disabled={busy}>
+                            删除
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </main>
+            )}
 
-      {activeId && tab === "files" ? (
-        <main>
-        <div className="files">
+            {view === "files" && activeId && (
+              <main>
+                <div className="files">
           <nav>
             {path.map((p, i) => (
               <button key={p.fid + i} onClick={() => goBack(i)} disabled={i === path.length - 1}>
@@ -965,11 +1012,16 @@ export default function App() {
               <ShareRow key={s.id} share={s} groups={groups} onGroup={assignGroup} onRemove={removeShare} onShare={shareLink} onCopy={copy} />
             ))}
           </ul>
-        </aside>
-        </main>
-      ) : (
-        !activeId && <p className="empty">扫码登录后在这里浏览网盘资源</p>
-      )}
+                </aside>
+              </main>
+            )}
+
+            {(view === "files" || view === "resources") && !activeId && (
+              <p className="empty">先到「网盘账号」扫码连接网盘</p>
+            )}
+          </div>
+        </div>
+      </div>
 
       <Modal state={dialog} onClose={() => setDialog(null)} />
       <Toasts items={toasts} />
